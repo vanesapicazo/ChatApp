@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "Launch ClienteLoginGUI",
+      "request": "launch",
+      "mainClass": "ClienteLoginGUI",
+      "projectName": "proyecto",
+      "vmArgs": "-cp lib/flatlaf-3.2.jar"
+    }
+  ]
+}
