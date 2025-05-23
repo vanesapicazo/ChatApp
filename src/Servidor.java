@@ -1,6 +1,7 @@
+// Servidor.java con soporte para grupos
 import java.io.*;
 import java.net.*;
-import java.util.HashSet;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Servidor {
@@ -8,6 +9,7 @@ public class Servidor {
     private static final String ARCHIVO_USUARIOS = "usuarios.txt";
     private static ConcurrentHashMap<String, String> usuarios = new ConcurrentHashMap<>();
     private static ConcurrentHashMap<String, PrintWriter> clientesConectados = new ConcurrentHashMap<>();
+    private static ConcurrentHashMap<String, Set<String>> grupos = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         cargarUsuarios();
@@ -64,7 +66,6 @@ public class Servidor {
 
             enviarListaUsuarios();
 
-            // Escuchar mensajes del cliente
             String input;
             while ((input = entrada.readLine()) != null) {
                 if (input.equals("GET_USERS")) {
@@ -74,12 +75,46 @@ public class Servidor {
                     String destino = partesMensaje[1];
                     String mensajeTexto = partesMensaje[2];
 
-                    PrintWriter salidaDestino = clientesConectados.get(destino);
-                    if (salidaDestino != null) {
-                        salidaDestino.println("FROM:" + usuarioActual + ":" + mensajeTexto);
+                    if (destino.startsWith("#")) {
+                        // mensaje a grupo
+                        String nombreGrupo = destino.substring(1);
+                        Set<String> miembros = grupos.get(nombreGrupo);
+                        if (miembros != null) {
+                            for (String miembro : miembros) {
+                                if (!miembro.equals(usuarioActual)) {
+                                    PrintWriter salidaDestino = clientesConectados.get(miembro);
+                                    if (salidaDestino != null) {
+                                        salidaDestino.println("FROM:#" + nombreGrupo + ":" + usuarioActual + ":" + mensajeTexto);
+                                    }
+                                }
+                            }
+                        } else {
+                            salida.println("ERROR:Grupo no existe.");
+                        }
                     } else {
-                        salida.println("ERROR:Usuario '" + destino + "' no conectado.");
+                        // mensaje privado
+                        PrintWriter salidaDestino = clientesConectados.get(destino);
+                        if (salidaDestino != null) {
+                            salidaDestino.println("FROM:" + usuarioActual + ":" + mensajeTexto);
+                        } else {
+                            salida.println("ERROR:Usuario '" + destino + "' no conectado.");
+                        }
                     }
+                } else if (input.startsWith("CREATE_GROUP:")) {
+                    String[] partesGrupo = input.split(":");
+                    String nombreGrupo = partesGrupo[1];
+                    Set<String> miembros = new HashSet<>(Arrays.asList(partesGrupo).subList(2, partesGrupo.length));
+                    miembros.add(usuarioActual);
+                    grupos.put(nombreGrupo, miembros);
+                    salida.println("GROUP_CREATED:" + nombreGrupo);
+                } else if (input.equals("GET_GROUPS")) {
+                    List<String> gruposUsuario = new ArrayList<>();
+                    for (Map.Entry<String, Set<String>> entry : grupos.entrySet()) {
+                        if (entry.getValue().contains(usuarioActual)) {
+                            gruposUsuario.add(entry.getKey());
+                        }
+                    }
+                    salida.println("GROUPS:" + String.join(",", gruposUsuario));
                 }
             }
 
@@ -93,7 +128,6 @@ public class Servidor {
             }
         }
     }
-
 
     private static void cargarUsuarios() {
         try (BufferedReader reader = new BufferedReader(new FileReader(ARCHIVO_USUARIOS))) {
@@ -131,12 +165,10 @@ public class Servidor {
     }
 
     private static String crearMensajeUsuarios() {
-    StringBuilder lista = new StringBuilder("USERS:");
-    for (String usuario : clientesConectados.keySet()) {
-        lista.append(usuario).append(",");
+        StringBuilder lista = new StringBuilder("USERS:");
+        for (String usuario : clientesConectados.keySet()) {
+            lista.append(usuario).append(",");
+        }
+        return lista.toString();
     }
-    return lista.toString();
-}
-
-
 }

@@ -143,9 +143,14 @@ public class ClienteLoginGUI extends JFrame {
                 case "LOGIN_OK":
                 case "REGISTER_OK":
                     estado.setText("✅ Bienvenido, " + usuario);
-                    dispose(); // Cierra la ventana de login
-                    new ClienteChatGUI(usuario, socket); // Abre el chat
+                    dispose();
+                    try {
+                        new ClienteChatGUI(usuario, socket);
+                    } catch (Exception ex) {
+                        JOptionPane.showMessageDialog(null, "❌ Error al abrir la ventana de chat: " + ex.getMessage());
+                    }
                     break;
+
                 case "LOGIN_FAIL":
                     estado.setText("❌ Usuario o contraseña incorrectos.");
                     socket.close();

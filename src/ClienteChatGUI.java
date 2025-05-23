@@ -1,177 +1,357 @@
+// Cliente.java actualizado con soporte para grupos
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
-import java.net.Socket;
-import java.util.HashMap;
+import java.net.*;
+import java.util.*;
 
-public class ClienteChatGUI extends JFrame {
-    private JTextArea areaChat;
-    private JTextField campoMensaje;
-    private JButton botonEnviar;
-    private JList<String> listaUsuarios;
-    private DefaultListModel<String> modeloUsuarios;
-    private JLabel etiquetaDestinatario;
-
-    private PrintWriter salida;
+public class ClienteChatGUI {
+    private Socket socket;
     private BufferedReader entrada;
-    private final String nombreUsuario;
-    private final HashMap<String, StringBuilder> historiales = new HashMap<>();
+    private PrintWriter salida;
+    private String usuario;
+    private JFrame ventana;
+    private JComboBox<String> listaUsuarios;
+    private JTextArea areaMensajes;
+    private JTextField campoEntrada;
+    private JButton botonEnviar;
+    private JButton botonGrupo;
+    private DefaultComboBoxModel<String> modeloUsuarios;
+    private java.util.List<String> grupos = new ArrayList<>();
+    private JTextField campoBusqueda;
+    private JList<String> listaChats;
+    private DefaultListModel<String> modeloListaChats;
+    private Map<String, StringBuilder> historialMensajes = new HashMap<>();
+    private Map<String, Integer> mensajesNoLeidos = new HashMap<>();
 
-    private String usuarioActualChat = null;
 
 
-    public ClienteChatGUI(String nombreUsuario, Socket socket) {
-        this.nombreUsuario = nombreUsuario;
+    public ClienteChatGUI(String usuario, Socket socket) {
+        this.usuario = usuario;
+        this.socket = socket;
+    
+        try {
+            entrada = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            salida = new PrintWriter(socket.getOutputStream(), true);
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(null, "❌ Error al conectar con el servidor.");
+            System.exit(1);
+        }
+    
+        crearVentana(); // Esto usa 'usuario' en el título de la ventana
+        salida.println("GET_GROUPS"); // para actualizar la lista inicial de grupos
+        recibirMensajes(); // inicia el hilo de recepción
+    }
+    
+    
+    
+    
 
-        setTitle("🌈 Chat - " + nombreUsuario);
-        setSize(600, 500);
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setLocationRelativeTo(null);
-        setLayout(new BorderLayout());
+    public void iniciarSesion() {
+        while (true) {
+            String usuario = JOptionPane.showInputDialog("Nombre de usuario:");
+            String clave = JOptionPane.showInputDialog("Contraseña:");
 
-        Font fuente = new Font("Segoe UI Emoji", Font.PLAIN, 14);
-        Color colorFondo = new Color(255, 248, 240);
-        Color colorBoton = new Color(255, 204, 229);
-        Color colorArea = new Color(255, 255, 255);
+            salida.println("LOGIN:" + usuario + ":" + clave);
 
-        // Panel usuarios
-        modeloUsuarios = new DefaultListModel<>();
-        listaUsuarios = new JList<>(modeloUsuarios);
-        listaUsuarios.setFont(fuente);
-        listaUsuarios.setBackground(new Color(240, 255, 255));
-        listaUsuarios.addListSelectionListener(e -> {
+            try {
+                String respuesta = entrada.readLine();
+                if ("LOGIN_OK".equals(respuesta)) {
+                    this.usuario = usuario;
+                    break;
+                } else {
+                    int opcion = JOptionPane.showConfirmDialog(null, "Usuario no registrado. ¿Deseas registrarte?", "Registro", JOptionPane.YES_NO_OPTION);
+                    if (opcion == JOptionPane.YES_OPTION) {
+                        salida.println("REGISTER:" + usuario + ":" + clave);
+                        String resp = entrada.readLine();
+                        if ("REGISTER_OK".equals(resp)) {
+                            this.usuario = usuario;
+                            break;
+                        } else {
+                            JOptionPane.showMessageDialog(null, "Ese usuario ya existe.");
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(null, "Error en comunicación con el servidor.");
+            }
+        }
+    }
+
+    private void crearVentana() {
+        ventana = new JFrame("Chat de " + usuario);
+        ventana.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        ventana.setSize(800, 600);
+        ventana.setLayout(new BorderLayout());
+    
+        // 🟦 Panel izquierdo: búsqueda + lista de chats
+        JPanel leftPanel = new JPanel(new BorderLayout());
+        leftPanel.setPreferredSize(new Dimension(200, 0)); // ancho fijo
+    
+        campoBusqueda = new JTextField();
+        campoBusqueda.setToolTipText("Buscar usuario o grupo...");
+        leftPanel.add(campoBusqueda, BorderLayout.NORTH);
+    
+        modeloListaChats = new DefaultListModel<>();
+        listaChats = new JList<>(modeloListaChats);
+        listaChats.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    
+        JScrollPane scrollChats = new JScrollPane(listaChats);
+        leftPanel.add(scrollChats, BorderLayout.CENTER);
+    
+        ventana.add(leftPanel, BorderLayout.WEST);
+    
+        // 🟩 Área central de mensajes
+        areaMensajes = new JTextArea();
+        areaMensajes.setEditable(false);
+        ventana.add(new JScrollPane(areaMensajes), BorderLayout.CENTER);
+    
+        // 🟥 Parte inferior con entrada y botones
+        JPanel panelAbajo = new JPanel(new BorderLayout());
+        campoEntrada = new JTextField();
+        botonEnviar = new JButton("Enviar");
+        botonGrupo = new JButton("Crear grupo");
+    
+        panelAbajo.add(campoEntrada, BorderLayout.CENTER);
+        panelAbajo.add(botonEnviar, BorderLayout.EAST);
+        panelAbajo.add(botonGrupo, BorderLayout.WEST);
+        ventana.add(panelAbajo, BorderLayout.SOUTH);
+    
+        // Listeners
+        botonEnviar.addActionListener(e -> enviarMensaje());
+        campoEntrada.addActionListener(e -> enviarMensaje());
+        botonGrupo.addActionListener(e -> crearGrupo());
+    
+        listaChats.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
-                String seleccionado = listaUsuarios.getSelectedValue();
+                String seleccionado = listaChats.getSelectedValue();
                 if (seleccionado != null) {
-                    usuarioActualChat = seleccionado;
-                    etiquetaDestinatario.setText(usuarioActualChat);
-                    areaChat.setText(historiales.getOrDefault(usuarioActualChat, new StringBuilder()).toString());
+                    String limpio = seleccionado.replaceAll(" \\(\\d+\\)$", ""); // elimina contador
+                    mensajesNoLeidos.remove(limpio);
+        
+                    for (int i = 0; i < modeloListaChats.size(); i++) {
+                        String actual = modeloListaChats.get(i).replaceAll(" \\(\\d+\\)$", "");
+                        if (actual.equals(limpio)) {
+                            modeloListaChats.set(i, limpio); // restaurar sin contador
+                            break;
+                        }
+                    }
+        
+                    StringBuilder historial = historialMensajes.getOrDefault(limpio, new StringBuilder());
+                    areaMensajes.setText(historial.toString());
                 }
             }
         });
-
-        JPanel panelUsuarios = new JPanel(new BorderLayout());
-        panelUsuarios.setBorder(BorderFactory.createTitledBorder("👥 Conectados"));
-        panelUsuarios.add(new JScrollPane(listaUsuarios), BorderLayout.CENTER);
-        panelUsuarios.setPreferredSize(new Dimension(150, 0));
-
-        // Área de chat
-        areaChat = new JTextArea();
-        areaChat.setEditable(false);
-        areaChat.setFont(fuente);
-        areaChat.setBackground(colorArea);
-        JScrollPane scrollChat = new JScrollPane(areaChat);
-        scrollChat.setBorder(BorderFactory.createTitledBorder("💬 Chat"));
-
-        etiquetaDestinatario = new JLabel("💬 Selecciona un usuario para chatear", JLabel.CENTER);
-        etiquetaDestinatario.setFont(new Font("Segoe UI Emoji", Font.BOLD, 16));
-        etiquetaDestinatario.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-
-        // Entrada de mensaje
-        campoMensaje = new JTextField();
-        campoMensaje.setFont(fuente);
-        campoMensaje.setBackground(Color.WHITE);
-        campoMensaje.addActionListener(e -> enviarMensaje());
-
-        botonEnviar = new JButton("Enviar ✉️");
-        botonEnviar.setFont(fuente);
-        botonEnviar.setBackground(colorBoton);
-        botonEnviar.addActionListener(e -> enviarMensaje());
-
-        JPanel panelEntrada = new JPanel(new BorderLayout());
-        panelEntrada.setBackground(colorFondo);
-        panelEntrada.add(campoMensaje, BorderLayout.CENTER);
-        panelEntrada.add(botonEnviar, BorderLayout.EAST);
-
-        add(panelUsuarios, BorderLayout.WEST);
-        add(etiquetaDestinatario, BorderLayout.NORTH);
-        add(scrollChat, BorderLayout.CENTER);
-        add(panelEntrada, BorderLayout.SOUTH);
-
-        getContentPane().setBackground(colorFondo);
-
-        try {
-            salida = new PrintWriter(socket.getOutputStream(), true);
-            entrada = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-        } catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "Error de conexión.", "Error", JOptionPane.ERROR_MESSAGE);
-            System.exit(1);
-        }
-
-        // Hilo para recibir mensajes
-        new Thread(() -> {
-            try {
-                String input;
-                while ((input = entrada.readLine()) != null) {
-                    if (input.startsWith("FROM:")) {
-                        String[] partes = input.split(":", 3);
-                        String remitente = partes[1];
-                        String texto = remitente + ": " + partes[2] + "\n";
-
-                        historiales.computeIfAbsent(remitente, k -> new StringBuilder()).append(texto);
-
-                        if (remitente.equals(usuarioActualChat)) {
-                            areaChat.append(texto);
-                        }
-
-                    } else if (input.startsWith("USERS:")) {
-                        String[] usuarios = input.substring(6).split(",");
-                        SwingUtilities.invokeLater(() -> {
-                            modeloUsuarios.clear();
-                            for (String usuario : usuarios) {
-                                if (!usuario.isBlank() && !usuario.equals(nombreUsuario)) {
-                                    modeloUsuarios.addElement(usuario);
-                                }
-                            }
-                        });
-
-                    } else if (input.startsWith("ERROR:")) {
-                        areaChat.append("⚠️ " + input + "\n");
-                    }
-                }
-
-            } catch (IOException e) {
-                areaChat.append("❌ Conexión perdida.\n");
-            }
-        }).start();
-
-        //Solicita la lista de usuarios
-        salida.println("GET_USERS");
-
-        setVisible(true);
-
-        //Hilo que actualiza la lista de usuarios cada 5 segundos
-        new Thread(() -> {
-            try {
-                while (true) {
-                    Thread.sleep(5000); // Espera 5 segundos
-                    salida.println("GET_USERS"); // Solicita la lista actualizada
-                }
-            } catch (InterruptedException e) {
-                System.out.println("⛔ Hilo de actualización interrumpido.");
-            }
-        }).start();
-
+        
+        
+    
+        ventana.setVisible(true);
     }
+
+
+    private void actualizarListaUsuarios(String mensaje) {
+        String[] partes = mensaje.substring(6).split(",");
+        modeloUsuarios = new DefaultComboBoxModel<>();
+        for (String usuarioRemoto : partes) {
+            if (!usuarioRemoto.equals(usuario) && !usuarioRemoto.isEmpty()) {
+                modeloUsuarios.addElement(usuarioRemoto);
+            }
+        }
+    
+        // Actualiza la lista de chats con usuarios conectados si no están ya
+        for (int i = 0; i < modeloUsuarios.getSize(); i++) {
+            String u = modeloUsuarios.getElementAt(i);
+            if (!modeloListaChats.contains(u)) {
+                modeloListaChats.addElement(u);
+            }
+        }
+    }
+
+    private void actualizarNotificacion(String nombreChat) {
+        int sinLeer = mensajesNoLeidos.getOrDefault(nombreChat, 0);
+        String displayName = sinLeer > 0 ? nombreChat + " (" + sinLeer + ")" : nombreChat;
+    
+        for (int i = 0; i < modeloListaChats.size(); i++) {
+            String actual = modeloListaChats.get(i);
+            String limpio = actual.replaceAll(" \\(\\d+\\)$", ""); // elimina " (n)" si existe
+            if (limpio.equals(nombreChat)) {
+                modeloListaChats.set(i, displayName);
+                return;
+            }
+        }
+    
+        // Si no existe aún, agregar
+        modeloListaChats.addElement(displayName);
+    }
+    
+    
+    
+    
 
     private void enviarMensaje() {
-        String mensaje = campoMensaje.getText().trim();
-        String destinatario = usuarioActualChat;
+        String destino = listaChats.getSelectedValue();
+        String mensaje = campoEntrada.getText();
+        if (destino != null && !mensaje.isEmpty()) {
+            salida.println("TO:" + destino + ":" + mensaje);
+    
+            StringBuilder historial = historialMensajes.computeIfAbsent(destino, k -> new StringBuilder());
+            historial.append("Yo: ").append(mensaje).append("\n");
+    
+            areaMensajes.setText(historial.toString());
+            campoEntrada.setText("");
+        }
+    }
+    
+    private void procesarMensajeRecibido(String linea) {
+        String[] partes = linea.split(":", 3); // FROM:usuario:mensaje
+        if (partes.length >= 3) {
+            String remitente = partes[1];
+            String mensaje = partes[2];
+    
+            historialMensajes.putIfAbsent(remitente, new StringBuilder());
+            historialMensajes.get(remitente).append(remitente).append(": ").append(mensaje).append("\n");
+    
+            SwingUtilities.invokeLater(() -> {
+                boolean encontrado = false;
+                for (int i = 0; i < modeloListaChats.size(); i++) {
+                    String val = modeloListaChats.get(i);
+                    String limpio = val.replaceAll(" \\(\\d+\\)$", "");
+                    if (limpio.equals(remitente)) {
+                        encontrado = true;
+                        break;
+                    }
+                }
+                if (!encontrado) {
+                    modeloListaChats.addElement(remitente);
+                }
+                if (listaChats.getSelectedValue() != null && listaChats.getSelectedValue().equals(remitente)) {
+                    areaMensajes.setText(historialMensajes.get(remitente).toString());
+                }
+            });
 
-        if (!mensaje.isEmpty() && destinatario != null) {
-            salida.println("TO:" + destinatario + ":" + mensaje);
-            String mensajeFormateado = "Yo: " + mensaje + "\n";
-            historiales.computeIfAbsent(destinatario, k -> new StringBuilder()).append(mensajeFormateado);
-
-            if (destinatario.equals(usuarioActualChat)) {
-                areaChat.append(mensajeFormateado);
+            String seleccionado = listaChats.getSelectedValue();
+            if (seleccionado == null || !seleccionado.equals(remitente)) {
+                mensajesNoLeidos.put(remitente, mensajesNoLeidos.getOrDefault(remitente, 0) + 1);
+                actualizarNotificacion(remitente);
             }
 
-            campoMensaje.setText("");
-        } else {
-            JOptionPane.showMessageDialog(this, "Selecciona un usuario y escribe un mensaje.", "Aviso", JOptionPane.WARNING_MESSAGE);
         }
 
     }
+
+    private void crearGrupo() {
+        String nombreGrupo = JOptionPane.showInputDialog("Nombre del grupo:");
+        if (nombreGrupo != null && !nombreGrupo.isEmpty()) {
+            java.util.List<String> seleccionados = new ArrayList<>();
+            for (int i = 0; i < modeloUsuarios.getSize(); i++) {
+                String u = modeloUsuarios.getElementAt(i);
+                if (!u.equals(usuario)) {
+                    int opcion = JOptionPane.showConfirmDialog(null, "¿Agregar a " + u + " al grupo?", "Grupo", JOptionPane.YES_NO_OPTION);
+                    if (opcion == JOptionPane.YES_OPTION) {
+                        seleccionados.add(u);
+                    }
+                }
+            }
+            if (!seleccionados.isEmpty()) {
+                StringBuilder sb = new StringBuilder("CREATE_GROUP:" + nombreGrupo);
+                for (String miembro : seleccionados) {
+                    sb.append(":" + miembro);
+                }
+                salida.println(sb.toString());
+                salida.println("GET_GROUPS");
+            }
+        }
+    }
+
+    private void actualizarListaGrupos(String mensaje) {
+        String[] partes = mensaje.split(":", 2);
+        if (partes.length == 2) {
+            String[] nombres = partes[1].split(",");
+            for (String g : nombres) {
+                if (!g.isEmpty() && !modeloListaChats.contains("#" + g)) {
+                    modeloListaChats.addElement("#" + g);
+                }
+            }
+        }
+    }
+    
+
+    private void procesarMensajeDeGrupo(String linea) {
+        // FROM:#grupo:usuario:mensaje
+        String[] partes = linea.split(":", 4);
+        if (partes.length >= 4) {
+            String grupo = "#" + partes[1].substring(1);  // Asegura que tenga #
+            String remitente = partes[2];
+            String mensaje = partes[3];
+    
+            historialMensajes.putIfAbsent(grupo, new StringBuilder());
+            historialMensajes.get(grupo).append(remitente).append(" (").append(grupo).append("): ").append(mensaje).append("\n");
+    
+            SwingUtilities.invokeLater(() -> {
+                boolean encontrado = false;
+                for (int i = 0; i < modeloListaChats.size(); i++) {
+                    String val = modeloListaChats.get(i);
+                    String limpio = val.replaceAll(" \\(\\d+\\)$", "");
+                    if (limpio.equals(remitente)) {
+                        encontrado = true;
+                        break;
+                    }
+                }
+                if (!encontrado) {
+                    modeloListaChats.addElement(remitente);
+                }
+                if (listaChats.getSelectedValue() != null && listaChats.getSelectedValue().equals(grupo)) {
+                    areaMensajes.setText(historialMensajes.get(grupo).toString());
+                }
+            });
+
+            String seleccionado = listaChats.getSelectedValue();
+            if (seleccionado == null || !seleccionado.equals(grupo)) {
+                mensajesNoLeidos.put(grupo, mensajesNoLeidos.getOrDefault(grupo, 0) + 1);
+                actualizarNotificacion(grupo);
+            }
+
+        }
+
+    }
+    
+
+    private void recibirMensajes() {
+        new Thread(() -> {
+            try {
+                String linea;
+                while ((linea = entrada.readLine()) != null) {
+                    final String mensaje = linea;
+    
+                    if (mensaje.startsWith("USERS:")) {
+                        SwingUtilities.invokeLater(() -> actualizarListaUsuarios(mensaje));
+                    } else if (mensaje.startsWith("FROM:#")) {
+                        SwingUtilities.invokeLater(() -> procesarMensajeDeGrupo(mensaje));
+                    } else if (mensaje.startsWith("FROM:")) {
+                        SwingUtilities.invokeLater(() -> procesarMensajeRecibido(mensaje));
+                    } else if (mensaje.startsWith("GROUPS:")) {
+                        SwingUtilities.invokeLater(() -> actualizarListaGrupos(mensaje));
+                    }
+                }
+            } catch (IOException e) {
+                System.out.println("❌ Error al recibir mensajes.");
+            }
+        }).start();
+    }
+    
+    
+    
+    
+
+    public static void main(String[] args) {
+        try {
+            Socket socket = new Socket("localhost", 1234);
+            new ClienteChatGUI("", socket); // el constructor se encarga de todo
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(null, "❌ No se pudo conectar al servidor.");
+        }
+    }
+    
+    
 }
